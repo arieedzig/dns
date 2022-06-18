@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: APP_NAME
+spec:
+  replicas: APP_REPLICA
+  selector:
+    matchLabels:
+      app: APP_NAME
+  template:
+    metadata:
+      labels:
+        app: APP_NAME
+    spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: APP_NAME    
+      containers:
+      - name: APP_NAME
+        image: APP_IMAGE
+        imagePullPolicy: Always          
+        args:
+        - /etc/supervisor/conf.d/supervisord.conf
+        command:
+        - /usr/bin/supervisord
+        - -c
+        workingDir: /root
+        resources:
+          limits:
+            cpu: 800m
+          requests:
+            cpu: 500m          
+        ports:
+        - containerPort: 53
+          name: dnsport
+          protocol: TCP
+        - containerPort: 53
+          name: udpport
+          protocol: UDP
+        livenessProbe:
+          exec:
+            command:
+            - /usr/bin/nslookup
+            - www.google.com
+            - 127.0.0.1
+          failureThreshold: 3
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1          
+        readinessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          tcpSocket:
+            port: 53
+          timeoutSeconds: 1          
+        envFrom:
+          - configMapRef:
+              name: proxy-config
+        volumeMounts:
+        - name: config-named
+          mountPath: /etc/bind/named.conf
+          subPath: "named.conf"		  
+        - name: config-zone
+          mountPath: /etc/bind/zone/db.xzone
+          subPath: "db.xzone"		  
+        - name: config-supervisord
+          mountPath: /etc/supervisor/conf.d/supervisord.conf
+          subPath: "supervisord.conf"		  
+      imagePullSecrets:
+      - name: new-registry
+      volumes:
+      - name: config-named
+        configMap:
+          name: APP_NAME-settings
+          items:
+          - key: named.conf
+            path: named.conf
+      - name: config-zone
+        configMap:
+          name: APP_NAME-settings
+          items:
+          - key: db.xzone
+            path: db.xzone
+      - name: config-supervisord
+        configMap:
+          name: APP_NAME-settings
+          items:
+          - key: supervisord.conf
+            path: supervisord.conf

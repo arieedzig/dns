@@ -1,0 +1,64 @@
+.k8s_script:
+  script:
+    - sed -i "s#APP_IMAGE#${CI_REGISTRY_IMAGE}:$BUILD_VERSION${CI_COMMIT_TAG}#g" server_deployment/app-deployment.yaml
+    - sed -i "s#ENVIRO#$ENV_NAME#g" server_deployment/app-deployment.yaml
+    - sed -i "s#APP_REPLICA#$ENV_REPLICA#g" server_deployment/*.yaml
+    - sed -i "s#APP_NAME#${CI_PROJECT_NAME}#g" server_deployment/*.yaml
+    - kubectl --kubeconfig server_deployment/$YAML_FILE create configmap ${CI_PROJECT_NAME}-settings --dry-run=client -n ${NS_NAME}${ENV_ENDING} --from-file=server_config/named.conf --from-file=server_config/db.xzone  --from-file=server_config/supervisord.conf -o yaml > configmap.yaml
+    - kubectl --kubeconfig server_deployment/$YAML_FILE apply -n ${NS_NAME}${ENV_ENDING} -f configmap.yaml
+    - kubectl --kubeconfig server_deployment/$YAML_FILE apply -n ${NS_NAME}${ENV_ENDING} -f server_deployment/app-service.yaml
+    - kubectl --kubeconfig server_deployment/$YAML_FILE apply -n ${NS_NAME}${ENV_ENDING} -f server_deployment/app-deployment.yaml
+    - kubectl --kubeconfig server_deployment/$YAML_FILE apply -n ${NS_NAME}${ENV_ENDING} -f server_deployment/app-hpa.yaml
+
+variables:
+  BUILD_VERSION: "0.1"
+  DOMAIN_NAME: "yourdomain.com"
+  YAML_FILE: "rke2.yaml"
+  NS_NAME: "app"
+  http_proxy: "http://192.168.1.1:3128"
+  no_proxy: "127.0.0.1,.svc.cluster.local"
+  
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - export HTTP_PROXY="http://192.168.1.1:3128"
+    - export HTTPS_PROXY="http://192.168.1.1:3128"
+    - |-
+       KANIKOPROXYBUILDARGS=""
+       KANIKOCFG="\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}"
+       if [ "x${http_proxy}" != "x" -o "x${https_proxy}" != "x" ]; then
+         KANIKOCFG="${KANIKOCFG}, \"proxies\": { \"default\": { \"httpProxy\": \"${http_proxy}\", \"httpsProxy\": \"${http_proxy}\", \"noProxy\": \"${no_proxy}\"}}"
+         KANIKOPROXYBUILDARGS="--build-arg 'http_proxy=${http_proxy}' --build-arg 'https_proxy=${http_proxy}' --build-arg 'no_proxy=${no_proxy}'"
+       fi
+       KANIKOCFG="{ ${KANIKOCFG} }"
+       echo "${KANIKOCFG}" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/server_deployment/Dockerfile"
+      --destination "${CI_REGISTRY_IMAGE}:$BUILD_VERSION${CI_COMMIT_TAG}"
+      --skip-tls-verify
+  when: manual
+
+deploy-dev:
+  stage: test
+  image: dtzar/helm-kubectl
+  variables:
+    ENV_NAME: "dev"
+    ENV_ENDING: "-dev"
+    ENV_REPLICA: 1
+  extends: .k8s_script
+  
+deploy-prod:
+  stage: deploy
+  image: dtzar/helm-kubectl
+  variables:
+    ENV_NAME: "prod"
+    ENV_ENDING: ""  
+    ENV_REPLICA: 2
+  extends: .k8s_script
+  when: manual
